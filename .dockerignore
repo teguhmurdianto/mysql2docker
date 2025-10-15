@@ -1,0 +1,41 @@
+# Python files
+*.py
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+
+# Environment and config
+.env
+.env.*
+!.env.example
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+README.md
+LICENSE
+
+# Dependencies
+requirements.txt
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
