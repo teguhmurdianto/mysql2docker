@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  # Example MySQL database
+  mysql:
+    image: mysql:8
+    container_name: example-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: testdb
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - backup-network
+
+  # Backup runner (run manually or schedule externally)
+  mysql-backup:
+    image: mysql2docker/mysql2docker:latest
+    # Uncomment to build from source:
+    # build: .
+    container_name: mysql-backup-runner
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=rootpassword
+      - MYSQL_DATABASE=testdb
+      - DOCKER_USERNAME=${DOCKER_USERNAME}
+      - DOCKER_PASSWORD=${DOCKER_PASSWORD}
+      - DOCKER_IMAGE_NAME=mysql-backup
+      # Optional custom tag:
+      # - CUSTOM_TAG=latest-backup
+    networks:
+      - backup-network
+    depends_on:
+      - mysql
+    # Run once and exit (use 'docker-compose run mysql-backup' to execute)
+    profiles:
+      - backup
+
+networks:
+  backup-network:
+    driver: bridge
+
+volumes:
+  mysql-data:

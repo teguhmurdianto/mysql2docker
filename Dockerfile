@@ -1,16 +1,26 @@
-FROM alpine:latest
+FROM python:3.11-alpine
 
 LABEL maintainer="mysql2docker"
-LABEL description="MySQL backup bundled in Docker image"
+LABEL description="MySQL backup runner - creates Docker images from MySQL dumps"
 
-# Create backup directory
-RUN mkdir -p /backups
+# Install required packages
+RUN apk add --no-cache \
+    docker-cli \
+    mysql-client \
+    gzip \
+    bash
 
-# Copy all backup files
-COPY backups/*.sql.gz /backups/
+# Create working directory
+WORKDIR /app
 
-# Add metadata
-RUN echo "Backup created at: $(date)" > /backups/backup_info.txt
+# Copy Python script
+COPY backup_mysql.py /app/
 
-# Default command to list backups
-CMD ["sh", "-c", "ls -lh /backups && cat /backups/backup_info.txt"]
+# Make script executable
+RUN chmod +x /app/backup_mysql.py
+
+# Create temp directory for backups
+RUN mkdir -p /tmp/mysql2docker
+
+# Set entrypoint
+ENTRYPOINT ["python", "/app/backup_mysql.py"]

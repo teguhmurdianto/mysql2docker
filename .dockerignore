@@ -1,11 +1,3 @@
-# Python files
-*.py
-*.pyc
-__pycache__/
-*.pyo
-*.pyd
-.Python
-
 # Environment and config
 .env
 .env.*
@@ -18,13 +10,20 @@ __pycache__/
 
 # Documentation
 *.md
-README.md
+!README.md
 LICENSE
 
-# Dependencies
-requirements.txt
-venv/
-env/
+# Backups (not needed in runner image)
+backups/
+*.sql
+*.sql.gz
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
 
 # IDE
 .vscode/
@@ -37,5 +36,14 @@ env/
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
+# Docker
+docker-compose.yml
+Dockerfile.dump
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Testing
+tests/
+*.test.py
