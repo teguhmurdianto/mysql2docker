@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  # Example MySQL database
+  mysql:
+    image: mysql:8
+    container_name: example-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: testdb
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - backup-network
+
+  # Backup runner with bridge network (default)
+  # Use this if MySQL whitelists Docker bridge network
+  mysql-backup-bridge:
+    image: mysql2docker/mysql2docker:latest
+    # Uncomment to build from source:
+    # build: .
+    container_name: mysql-backup-runner-bridge
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=rootpassword
+      - MYSQL_DATABASE=testdb
+      - DOCKER_USERNAME=${DOCKER_USERNAME}
+      - DOCKER_PASSWORD=${DOCKER_PASSWORD}
+      - DOCKER_IMAGE_NAME=mysql-backup
+    networks:
+      - backup-network
+    depends_on:
+      - mysql
+    profiles:
+      - backup-bridge
+
+  # Backup runner with host network
+  # Use this if MySQL only whitelists host IP
+  mysql-backup-host:
+    image: mysql2docker/mysql2docker:latest
+    container_name: mysql-backup-runner-host
+    network_mode: host  # Use host network - container uses host IP
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # When using host network, use localhost or actual MySQL IP
+      - MYSQL_HOST=localhost
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=rootpassword
+      - MYSQL_DATABASE=testdb
+      - DOCKER_USERNAME=${DOCKER_USERNAME}
+      - DOCKER_PASSWORD=${DOCKER_PASSWORD}
+      - DOCKER_IMAGE_NAME=mysql-backup
+    profiles:
+      - backup-host
+
+networks:
+  backup-network:
+    driver: bridge
+
+volumes:
+  mysql-data:
