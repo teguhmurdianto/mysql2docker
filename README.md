@@ -51,15 +51,63 @@ Unlike traditional backup solutions that store backups in S3, FTP, or local stor
 
 **That's it!** No need to install Python, mysqldump, or any other tools on your host.
 
+### 🔌 Network Considerations
+
+If your MySQL server has **IP whitelist enabled**, you have two options:
+
+**Option 1: Host Network Mode (Recommended for IP Whitelist)**
+```bash
+# Container uses host IP directly
+docker run --rm \
+  --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e MYSQL_HOST=localhost \
+  mysql2docker:latest
+```
+- ✅ Works with MySQL IP whitelist (uses host IP)
+- ✅ Perfect for production servers
+- ⚠️ Only works on Linux (not Docker Desktop macOS/Windows)
+
+**Option 2: Bridge Network (Default)**
+```bash
+# Container uses Docker bridge network IP
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e MYSQL_HOST=mysql-server \
+  mysql2docker:latest
+```
+- ✅ Works on all platforms
+- ⚠️ Requires whitelisting Docker bridge IP range (e.g., 172.17.0.0/16)
+
 ## 🚀 Quick Start
 
 ### Option 1: Use Pre-built Image (Recommended)
+
+#### For MySQL with IP Whitelist (Host Network)
 
 ```bash
 # Pull the runner image
 docker pull mysql2docker/mysql2docker:latest
 
-# Run backup (replace with your credentials)
+# Run backup using host network (Linux only)
+docker run --rm \
+  --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e MYSQL_HOST=localhost \
+  -e MYSQL_PORT=3306 \
+  -e MYSQL_USER=root \
+  -e MYSQL_PASSWORD=your_password \
+  -e MYSQL_DATABASE=your_database \
+  -e DOCKER_USERNAME=your_dockerhub_username \
+  -e DOCKER_PASSWORD=your_dockerhub_token \
+  -e DOCKER_IMAGE_NAME=mysql-backup \
+  mysql2docker/mysql2docker:latest
+```
+
+#### For MySQL Without IP Whitelist (Bridge Network)
+
+```bash
+# Run backup using bridge network
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e MYSQL_HOST=your-mysql-host \
@@ -115,16 +163,19 @@ DOCKER_IMAGE_NAME=mysql-backup
 
 ### Using with docker-compose
 
+**Example 1: MySQL with IP Whitelist (Host Network)**
+
 ```yaml
 version: '3.8'
 
 services:
-  mysql-backup:
+  mysql-backup-host:
     image: mysql2docker/mysql2docker:latest
+    network_mode: host  # Uses host IP
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      - MYSQL_HOST=mysql
+      - MYSQL_HOST=localhost  # or actual MySQL server IP
       - MYSQL_PORT=3306
       - MYSQL_USER=root
       - MYSQL_PASSWORD=${MYSQL_ROOT_PASSWORD}
@@ -132,11 +183,52 @@ services:
       - DOCKER_USERNAME=${DOCKER_USERNAME}
       - DOCKER_PASSWORD=${DOCKER_PASSWORD}
       - DOCKER_IMAGE_NAME=mysql-backup
+```
 
+Run with:
+```bash
+docker-compose run --rm mysql-backup-host
+```
+
+**Example 2: MySQL Without IP Whitelist (Bridge Network)**
+
+```yaml
+version: '3.8'
+
+services:
   mysql:
     image: mysql:8
     environment:
-      - MYSQL_ROOT_PASSWORD=rootpassword
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: myapp
+    networks:
+      - backup-network
+
+  mysql-backup-bridge:
+    image: mysql2docker/mysql2docker:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - MYSQL_HOST=mysql  # service name
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=myapp
+      - DOCKER_USERNAME=${DOCKER_USERNAME}
+      - DOCKER_PASSWORD=${DOCKER_PASSWORD}
+      - DOCKER_IMAGE_NAME=mysql-backup
+    networks:
+      - backup-network
+    depends_on:
+      - mysql
+
+networks:
+  backup-network:
+```
+
+Run with:
+```bash
+docker-compose run --rm mysql-backup-bridge
 ```
 
 ## 📦 Restore Backup
@@ -183,8 +275,14 @@ docker run --rm --network your_network \
 
 ### Using Cron (Linux/macOS)
 
+**With Host Network (for IP Whitelist):**
 ```bash
 # Add to crontab: backup daily at 2 AM
+0 2 * * * docker run --rm --network host -v /var/run/docker.sock:/var/run/docker.sock --env-file /path/to/.env mysql2docker:latest >> /var/log/mysql2docker.log 2>&1
+```
+
+**With Bridge Network:**
+```bash
 0 2 * * * docker run --rm -v /var/run/docker.sock:/var/run/docker.sock --env-file /path/to/.env mysql2docker:latest >> /var/log/mysql2docker.log 2>&1
 ```
 
@@ -192,6 +290,21 @@ docker run --rm --network your_network \
 
 Create `/etc/systemd/system/mysql-backup.service`:
 
+**With Host Network:**
+```ini
+[Unit]
+Description=MySQL Backup to Docker
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker run --rm \
+  --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  --env-file /etc/mysql2docker/.env \
+  mysql2docker:latest
+```
+
+**With Bridge Network:**
 ```ini
 [Unit]
 Description=MySQL Backup to Docker
@@ -226,6 +339,7 @@ sudo systemctl start mysql-backup.timer
 
 ### Using Kubernetes CronJob
 
+**With Host Network (for IP Whitelist):**
 ```yaml
 apiVersion: batch/v1
 kind: CronJob
@@ -237,12 +351,13 @@ spec:
     spec:
       template:
         spec:
+          hostNetwork: true  # Use host network
           containers:
           - name: mysql-backup
             image: mysql2docker/mysql2docker:latest
             env:
             - name: MYSQL_HOST
-              value: "mysql-service"
+              value: "localhost"  # or MySQL server IP
             - name: MYSQL_USER
               valueFrom:
                 secretKeyRef:
@@ -253,7 +368,49 @@ spec:
                 secretKeyRef:
                   name: mysql-credentials
                   key: password
-            # ... other env vars
+            - name: MYSQL_DATABASE
+              value: "myapp"
+            - name: DOCKER_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: docker-credentials
+                  key: username
+            - name: DOCKER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: docker-credentials
+                  key: password
+            - name: DOCKER_IMAGE_NAME
+              value: "mysql-backup"
+            volumeMounts:
+            - name: docker-sock
+              mountPath: /var/run/docker.sock
+          volumes:
+          - name: docker-sock
+            hostPath:
+              path: /var/run/docker.sock
+          restartPolicy: OnFailure
+```
+
+**With Bridge Network:**
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mysql-backup
+spec:
+  schedule: "0 2 * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: mysql-backup
+            image: mysql2docker/mysql2docker:latest
+            env:
+            - name: MYSQL_HOST
+              value: "mysql-service"  # K8s service name
+            # ... other env vars same as above
             volumeMounts:
             - name: docker-sock
               mountPath: /var/run/docker.sock
@@ -279,6 +436,47 @@ mysql2docker/
 ```
 
 ## ⚙️ Advanced Usage
+
+### MySQL IP Whitelist Configuration
+
+If your MySQL server has IP whitelist enabled, here are your options:
+
+**1. Host Network Mode (Recommended for Linux)**
+```bash
+docker run --rm \
+  --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e MYSQL_HOST=localhost \
+  mysql2docker:latest
+```
+- Container uses host IP
+- Works only on Linux
+- MySQL sees connection from whitelisted host IP
+
+**2. Whitelist Docker Bridge Network**
+```bash
+# Find Docker bridge subnet
+docker network inspect bridge | grep Subnet
+# Example output: "Subnet": "172.17.0.0/16"
+
+# Add to MySQL whitelist
+# In MySQL: GRANT ALL ON *.* TO 'user'@'172.17.0.%' IDENTIFIED BY 'password';
+```
+
+**3. Custom Docker Network with Static IP**
+```bash
+# Create network with specific subnet
+docker network create --subnet=192.168.100.0/24 backup-net
+
+# Run container with static IP
+docker run --rm \
+  --network backup-net \
+  --ip 192.168.100.10 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  mysql2docker:latest
+
+# Whitelist 192.168.100.10 in MySQL
+```
 
 ### Custom Backup Tag
 
@@ -389,12 +587,85 @@ docker run --rm \
   mysql2docker:latest
 ```
 
-### Error: "Access denied for user"
+### Error: "Access denied for user" or Connection Timeout
 
-**Solution:** Check MySQL credentials and network connectivity:
-```bash
-# Test MySQL connection
-docker run --rm mysql:8 mysql -h $MYSQL_HOST -u $MYSQL_USER -p$MYSQL_PASSWORD -e "SELECT 1"
+The backup script will automatically test the MySQL connection before starting the backup.
+
+**Common causes:**
+
+1. **IP Whitelist Issue** (Most Common)
+   ```
+   Error: Host 'xxx.xxx.xxx.xxx' is not allowed to connect
+   ```
+   **Solution:** Use host network mode:
+   ```bash
+   docker run --rm \
+     --network host \
+     -v /var/run/docker.sock:/var/run/docker.sock \
+     -e MYSQL_HOST=localhost \
+     mysql2docker:latest
+   ```
+
+2. **Wrong Credentials**
+   ```
+   Error: Access denied for user 'root'@'localhost'
+   ```
+   **Solution:** Verify credentials:
+   ```bash
+   # Test connection manually
+   docker run --rm mysql:8 mysql \
+     -h $MYSQL_HOST \
+     -u $MYSQL_USER \
+     -p$MYSQL_PASSWORD \
+     -e "SELECT 1"
+   ```
+
+3. **Database Not Exists**
+   ```
+   Error: Unknown database 'mydb'
+   ```
+   **Solution:** Check database name:
+   ```bash
+   docker run --rm mysql:8 mysql \
+     -h $MYSQL_HOST \
+     -u $MYSQL_USER \
+     -p$MYSQL_PASSWORD \
+     -e "SHOW DATABASES"
+   ```
+
+4. **Firewall/Network Issue**
+   ```
+   Error: Can't connect to MySQL server on 'host'
+   ```
+   **Solution:** Check network connectivity:
+   ```bash
+   # Test from container
+   docker run --rm alpine ping -c 3 $MYSQL_HOST
+   
+   # Test port
+   docker run --rm alpine nc -zv $MYSQL_HOST 3306
+   ```
+
+### Connection Test Output
+
+The script will show detailed connection test results:
+
+```
+2024-10-16 10:30:00 - INFO - Testing MySQL connection...
+2024-10-16 10:30:00 - INFO - Connecting to: db.example.com:3306
+2024-10-16 10:30:01 - INFO - ✓ MySQL connection successful!
+```
+
+If connection fails:
+```
+2024-10-16 10:30:00 - INFO - Testing MySQL connection...
+2024-10-16 10:30:00 - INFO - Connecting to: db.example.com:3306
+2024-10-16 10:30:10 - ERROR - ✗ MySQL connection failed!
+2024-10-16 10:30:10 - ERROR - Please check:
+2024-10-16 10:30:10 - ERROR -   1. MySQL credentials (user/password)
+2024-10-16 10:30:10 - ERROR -   2. Database name is correct
+2024-10-16 10:30:10 - ERROR -   3. User has proper permissions
+2024-10-16 10:30:10 - ERROR -   4. IP whitelist (if using Docker, consider --network host)
 ```
 
 ### Error: "unauthorized: authentication required"
@@ -414,6 +685,18 @@ docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   mysql2docker:latest
 ```
+
+**Note:** Host network mode (`--network host`) does NOT work on Docker Desktop (Windows/macOS). If you need to connect to MySQL with IP whitelist on these platforms:
+
+1. **Option A:** Add Docker Desktop VM IP to MySQL whitelist
+2. **Option B:** Use SSH tunnel:
+   ```bash
+   # Forward MySQL port via SSH
+   ssh -L 3306:localhost:3306 user@mysql-server
+   
+   # Then connect to localhost from container
+   ```
+3. **Option C:** Run on Linux server where host network works
 
 ## 📊 Monitoring and Logging
 

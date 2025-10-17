@@ -6,9 +6,9 @@ LABEL description="MySQL backup runner - creates Docker images from MySQL dumps"
 # Install required packages
 RUN apk add --no-cache \
     docker-cli \
-    mysql-client \
+    mariadb-client \
     gzip \
-    bash
+    ca-certificates
 
 # Create working directory
 WORKDIR /app

@@ -32,6 +32,44 @@ DOCKER_PASSWORD = os.getenv('DOCKER_PASSWORD')
 DOCKER_IMAGE_NAME = os.getenv('DOCKER_IMAGE_NAME', 'mysql-backup')
 CUSTOM_TAG = os.getenv('CUSTOM_TAG', '')  # Optional custom tag
 
+# Optional SSL configuration
+MYSQL_SSL_MODE = os.getenv('MYSQL_SSL_MODE', '')  # e.g., VERIFY_CA, VERIFY_IDENTITY, PREFERRED, DISABLED
+MYSQL_SSL_CA = os.getenv('MYSQL_SSL_CA', '')      # path to CA file inside container
+
+def _build_ssl_flags():
+    """Translate MYSQL_SSL_MODE/CA to MariaDB client flags.
+    Modes supported:
+    - DISABLED:       --skip-ssl
+    - PREFERRED:      (default; no flag). If CA provided, enable --ssl with --ssl-ca
+    - VERIFY_CA:      --ssl + --ssl-ca (if provided)
+    - VERIFY_IDENTITY: --ssl + --ssl-ca (if provided) + --ssl-verify-server-cert
+    """
+    mode = (MYSQL_SSL_MODE or '').strip().upper()
+    flags = []
+    if mode == 'DISABLED':
+        flags.append('--skip-ssl')
+        return flags
+    # PREFERRED or empty: do nothing, but if CA provided, enable ssl with CA
+    if mode in ('', 'PREFERRED'):
+        if MYSQL_SSL_CA:
+            flags.extend(['--ssl', f'--ssl-ca={MYSQL_SSL_CA}'])
+        return flags
+    if mode == 'VERIFY_CA':
+        flags.append('--ssl')
+        if MYSQL_SSL_CA:
+            flags.append(f'--ssl-ca={MYSQL_SSL_CA}')
+        return flags
+    if mode == 'VERIFY_IDENTITY':
+        flags.append('--ssl')
+        if MYSQL_SSL_CA:
+            flags.append(f'--ssl-ca={MYSQL_SSL_CA}')
+        flags.append('--ssl-verify-server-cert')
+        return flags
+    # Fallback: treat as preferred
+    if MYSQL_SSL_CA:
+        flags.extend(['--ssl', f'--ssl-ca={MYSQL_SSL_CA}'])
+    return flags
+
 # Working directory
 WORK_DIR = Path('/tmp/mysql2docker')
 WORK_DIR.mkdir(exist_ok=True)
@@ -54,6 +92,54 @@ def validate_config():
         logger.error(f"Missing required environment variables: {', '.join(missing)}")
         logger.error("Please provide all required environment variables")
         sys.exit(1)
+
+
+def test_mysql_connection():
+    """Test MySQL connection before backup"""
+    logger.info("Testing MySQL connection...")
+    logger.info(f"Connecting to: {MYSQL_HOST}:{MYSQL_PORT}")
+    
+    cmd = [
+        'mariadb',
+        f'-h{MYSQL_HOST}',
+        f'-P{MYSQL_PORT}',
+        f'-u{MYSQL_USER}',
+        f'-p{MYSQL_PASSWORD}',
+    ]
+    cmd += _build_ssl_flags()
+    cmd += ['-e', 'SELECT 1', MYSQL_DATABASE]
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        logger.info("✓ MySQL connection successful!")
+        return True
+    except subprocess.TimeoutExpired:
+        logger.error("✗ MySQL connection timeout!")
+        logger.error(f"Cannot connect to {MYSQL_HOST}:{MYSQL_PORT}")
+        logger.error("Please check:")
+        logger.error("  1. MySQL server is running")
+        logger.error("  2. Host and port are correct")
+        logger.error("  3. Network connectivity")
+        logger.error("  4. Firewall rules")
+        return False
+    except subprocess.CalledProcessError as e:
+        logger.error("✗ MySQL connection failed!")
+        logger.error(f"Error: {e.stderr if e.stderr else str(e)}")
+        logger.error("Please check:")
+        logger.error("  1. MySQL credentials (user/password)")
+        logger.error("  2. Database name is correct")
+        logger.error("  3. User has proper permissions")
+        logger.error("  4. IP whitelist (if using Docker, consider --network host)")
+        return False
+    except Exception as e:
+        logger.error(f"✗ Unexpected error testing connection: {e}")
+        return False
 
 
 def run_command(cmd, capture_output=False, hide_password=False):
@@ -98,8 +184,9 @@ def backup_mysql(timestamp):
         '--single-transaction',
         '--quick',
         '--lock-tables=false',
-        MYSQL_DATABASE
     ]
+    cmd += _build_ssl_flags()
+    cmd.append(MYSQL_DATABASE)
     
     try:
         # Dump to file
@@ -226,6 +313,13 @@ def main():
     # Validate configuration
     validate_config()
     
+    # Test MySQL connection first
+    if not test_mysql_connection():
+        logger.error("=" * 70)
+        logger.error("✗ Backup aborted due to connection failure")
+        logger.error("=" * 70)
+        sys.exit(1)
+    
     # Generate timestamp
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     logger.info(f"Backup timestamp: {timestamp}")
@@ -254,7 +348,7 @@ def main():
         logger.info(f"✓ Docker image: {image_tag}")
         logger.info(f"✓ Backup file size: {backup_file.stat().st_size / (1024*1024):.2f} MB")
         logger.info("=" * 70)
-            
+        
     except KeyboardInterrupt:
         logger.warning("\nProcess interrupted by user")
         sys.exit(1)
